@@ -77,3 +77,42 @@ def softmax(x: torch.Tensor, i: int):
     x = x - torch.amax(x, i, keepdim = True)
     x = torch.exp(x)
     return x / torch.sum(x, i, keepdim = True)
+
+def scaled_dot_product_attention(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, mask: torch.Tensor | None = None):
+    """
+        Given key (K), query (Q), and value (V) tensors, return
+        the output of your scaled dot product attention implementation.
+
+        Args:
+            query (Float[Tensor, " ... queries d_k"]): Query tensor
+            key (Float[Tensor, " ... keys d_k"]): Key tensor
+            value (Float[Tensor, " ... keys d_v"]): Values tensor
+            mask (Bool[Tensor, " ... queries keys"] | None): Mask tensor
+        Returns:
+            Float[Tensor, " ... queries d_v"]: Output of SDPA
+        """
+    kq = einsum(key, query, "... seq1 d, ... seq2 d -> ... seq2 seq1")/sqrt(key.shape[-1])
+    if mask is not None:
+        kq += torch.where(mask, 0, -torch.inf)
+    return einsum(softmax(kq, -1), value, "... seq1 seq2, ... seq2 d -> ... seq1 d")
+
+class multihead_self_attention(nn.Module):
+    def __init__(self, d_model: int, num_heads: int, device: torch.device | None = None, dtype: torch.dtype | None = None) -> None:
+        super().__init__()
+        # d_k = d_v = d_model / h
+        assert d_model % num_heads == 0
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.W_q: Linear = Linear(d_model, d_model, device, dtype)
+        self.W_k: Linear = Linear(d_model, d_model, device, dtype)
+        self.W_v: Linear = Linear(d_model, d_model, device, dtype)
+        self.W_o: Linear = Linear(d_model, d_model, device, dtype)
+    def forward(self, x: torch.Tensor)->torch.Tensor:
+        q: torch.Tensor = self.W_q(x)
+        k: torch.Tensor = self.W_k(x)
+        v: torch.Tensor = self.W_v(x)
+        q = rearrange(q, "... seq (h d) -> ... h seq d", h = self.num_heads)
+        k = rearrange(k, "... seq (h d) -> ... h seq d", h = self.num_heads)
+        v = rearrange(v, "... seq (h d) -> ... h seq d", h = self.num_heads)
+        mask = torch.tril(torch.ones(q.shape[-2], q.shape[-2], dtype = torch.bool, device=x.device), diagonal=0)
+        return self.W_o(rearrange(scaled_dot_product_attention(q, k, v, mask), "... h seq d -> ... seq (h d)"))
